@@ -311,7 +311,7 @@ const MarketTrendsForm: React.FC<MarketTrendsFormProps> = ({ language, onBack })
         .from('realestatelistings')
         .select('*')
         .order('date_listed', { ascending: false })
-        .limit(500); // เพิ่มจำนวนข้อมูลสำหรับการวิเคราะห์
+        .range(0, 90000000);
 
       if (fetchError) {
         console.error('Supabase error:', fetchError);
@@ -471,19 +471,98 @@ const MarketTrendsForm: React.FC<MarketTrendsFormProps> = ({ language, onBack })
         await fetchAllProperties();
       }
 
-      // จำลองเวลาประมวลผล
-      setTimeout(() => {
-        try {
-          const analysis = analyzeMarketData(allProperties, selectedLocation, selectedPropertyType, selectedTimeframe);
-          setMarketData(analysis);
-          setShowResults(true);
-        } catch (analysisError) {
-          console.error('Analysis error:', analysisError);
-          setError('Error analyzing market data');
-        } finally {
-          setIsLoading(false);
+      // We always pull at least 24 months of history  so Prophet has enough information to learn seasonality / trend
+      const timeframeMonthsLocal: Record<string, number> = { '3m': 3, '6m': 6, '1y': 12, '2y': 24 };
+      const monthsBackCsv = Math.max(24, timeframeMonthsLocal[selectedTimeframe as keyof typeof timeframeMonthsLocal] || 12);
+      const cutoffCsvForecast = new Date();
+      cutoffCsvForecast.setMonth(cutoffCsvForecast.getMonth() - monthsBackCsv);
+
+      const { data: filtered, error: filteredErr } = await supabase
+        .from('realestatelistings')
+        .select('*')
+        .gte('date_listed', cutoffCsvForecast.toISOString().slice(0, 10))
+        .order('date_listed', { ascending: false })
+        .range(0, 2000000); // pull up to 20k rows, remove earlier 5k cap
+
+      if (filteredErr) {
+        console.error('Filtered fetch error:', filteredErr);
+      }
+
+      const baseRows = (filtered && filtered.length > 0 ? filtered : allProperties);
+
+      // Analyse base metrics locally (price index, etc.) on the filtered rows
+      const analysis = analyzeMarketData(
+        baseRows,
+        selectedLocation,
+        selectedPropertyType,
+        selectedTimeframe
+      );
+
+      // Build rows for forecast API – keep only needed columns (reuse monthsBackCsv defined above)
+      const cutoffCsvHistory = new Date();
+      cutoffCsvHistory.setMonth(cutoffCsvHistory.getMonth() - monthsBackCsv);
+
+      const filterRows = (monthsBack: number) => {
+        const cut = new Date();
+        cut.setMonth(cut.getMonth() - monthsBack);
+        return baseRows
+          .filter(p => {
+            if (p.price <= 0) return false;
+            // Use inclusive matching for location so "Bangkok" matches sub-district entries
+            if (selectedLocation !== 'all' && p.location) {
+              const loc = p.location.toLowerCase();
+              if (!loc.includes(selectedLocation.toLowerCase())) return false;
+            }
+            if (selectedPropertyType !== 'all' && p.property_type !== selectedPropertyType) return false;
+            return new Date(p.date_listed) >= cut;
+          })
+          .map(p => ({
+            Date_Listed: p.date_listed,
+            Location: p.location,
+            Property_Type: p.property_type,
+            Price: p.price,
+          }));
+      };
+
+      let rowsForCsv = filterRows(monthsBackCsv);
+      let extendMonths = monthsBackCsv;
+      // keep expanding look-back window until we have at least 100 rows or 10 years of history
+      while (rowsForCsv.length < 100 && extendMonths < 120) {
+        extendMonths += 12;
+        rowsForCsv = filterRows(extendMonths);
+      }
+
+      const tfMap: Record<string, string> = {
+        '3m': 'Next 3 Months',
+        '6m': 'Next 6 Months',
+        '1y': 'Next 1 Year',
+        '2y': 'Next 2 Years',
+      };
+
+      try {
+        const { postForecast } = await import('../api/realEstateApi');
+        const forecastRes = await postForecast({
+          csv_data: JSON.stringify(rowsForCsv),
+          location: selectedLocation === 'all' ? '' : selectedLocation,
+          property_type: selectedPropertyType === 'all' ? '' : selectedPropertyType,
+          timeframe: tfMap[selectedTimeframe] || 'Next 6 Months',
+        });
+
+        if (!forecastRes.error && forecastRes.forecast?.length) {
+          analysis.monthlyData = forecastRes.forecast.map(f => ({
+            month: f.month,
+            price: Math.max(f.price, 0),
+            transactions: 0,
+          }));
         }
-      }, 2000);
+      } catch (apiErr) {
+        console.error('Forecast API error:', apiErr);
+        // keep local monthlyData if API fails
+      }
+
+      setMarketData(analysis);
+      setShowResults(true);
+      setIsLoading(false);
     } catch (fetchError) {
       console.error('Fetch error:', fetchError);
       setError(fetchError instanceof Error ? fetchError.message : 'Error fetching data');

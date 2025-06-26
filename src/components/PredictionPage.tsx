@@ -352,7 +352,7 @@ const PredictionPage: React.FC<PredictionPageProps> = ({ language, onBack }) => 
         .from('realestatelistings')
         .select('*')
         .order('date_listed', { ascending: false })
-        .limit(200);
+        .limit(20000);
 
       if (error) {
         console.error('Supabase error:', error);
