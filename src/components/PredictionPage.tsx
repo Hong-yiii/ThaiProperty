@@ -542,25 +542,42 @@ const PredictionPage: React.FC<PredictionPageProps> = ({ language, onBack }) => 
     setError('');
 
     try {
-      console.log('Starting prediction with form data:', formData);
-      
-      const marketData = await fetchMarketData();
-      
-      if (marketData.length === 0) {
-        setError(currentContent.noDataFound);
-        setIsLoading(false);
-        return;
+      if (!formData.location || !formData.propertyType || !formData.area) {
+        throw new Error('กรุณากรอกข้อมูลให้ครบถ้วน');
       }
 
-      // Simulate processing time for better UX
-      await new Promise(resolve => setTimeout(resolve, 2000));
+      // Build payload for backend API
+      const payload = {
+        Property_Type: formData.propertyType,
+        Location: formData.location,
+        Size_sq_m: parseFloat(formData.area),
+        Furnished: formData.furnished,
+        Bedrooms: parseInt(formData.bedrooms || '0', 10),
+        Bathrooms: parseInt(formData.bathrooms || '0', 10),
+        Year: parseInt(formData.yearBuilt || new Date().getFullYear().toString(), 10),
+      } as const;
 
-      const result = analyzeMarketData(marketData, formData);
-      setPrediction(result);
+      const { prediction: apiPrice, error: apiError } = await (await import('../api/realEstateApi')).postPrediction(payload);
+
+      if (apiError) {
+        throw new Error(apiError);
+      }
+
+      // Still fetch market data for insights / comparable
+      const marketData = await fetchMarketData();
+      const baseline = analyzeMarketData(marketData, formData);
+
+      // Override estimated price with API value
+      baseline.estimatedPrice = apiPrice;
+      baseline.priceRange = {
+        min: apiPrice * 0.9,
+        max: apiPrice * 1.1,
+      };
+
+      setPrediction(baseline);
     } catch (err) {
       console.error('Prediction error:', err);
-      const errorMessage = err instanceof Error ? err.message : 'Unknown error occurred';
-      setError(errorMessage.includes('Database') ? currentContent.databaseError : errorMessage);
+      setError(err instanceof Error ? err.message : 'Unknown error occurred');
     } finally {
       setIsLoading(false);
     }
