@@ -34,8 +34,14 @@ export interface ForecastResponse {
   error?: string;
 }
 
-const PREDICT_URL = 'https://realestatemodel-production.up.railway.app/predict';
-const FORECAST_URL = 'https://web-production-c3a7d.up.railway.app/forecast';
+const isDev = import.meta.env.DEV;
+const PREDICT_URL = isDev
+  ? '/api/predict'
+  : 'https://realestatemodel-production.up.railway.app/predict';
+
+const FORECAST_URL = isDev
+  ? '/api/forecast'
+  : 'https://web-production-c3a7d.up.railway.app/forecast';
 
 export async function postPrediction(payload: PredictRequest): Promise<PredictResponse> {
   const res = await fetch(PREDICT_URL, {
