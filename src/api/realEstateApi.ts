@@ -34,14 +34,9 @@ export interface ForecastResponse {
   error?: string;
 }
 
-const isDev = import.meta.env.DEV;
-const PREDICT_URL = isDev
-  ? '/api/predict'
-  : 'https://realestatemodel-production.up.railway.app/predict';
-
-const FORECAST_URL = isDev
-  ? '/api/forecast'
-  : 'https://web-production-c3a7d.up.railway.app/forecast';
+// Both development (via Vite proxy) and production (Vercel serverless) use the same relative paths
+const PREDICT_URL = '/api/predict';
+const FORECAST_URL = '/api/forecast';
 
 export async function postPrediction(payload: PredictRequest): Promise<PredictResponse> {
   const res = await fetch(PREDICT_URL, {
